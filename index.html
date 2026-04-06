@@ -250,9 +250,9 @@
     <div class="shell">
       <div class="topbar">
         <h1 class="title" id="pageTitle">名片掃描器</h1>
-        <p class="subtitle" id="pageSubtitle">先拍照或上傳名片照片，再進行裁切，最後輸出結果。</p>
+        <p class="subtitle" id="pageSubtitle">先拍名片照片，再進行裁切，最後輸出結果。</p>
         <div class="steps">
-          <div class="step active" id="step1">步驟 1：拍照 / 上傳</div>
+          <div class="step active" id="step1">步驟 1：拍照</div>
           <div class="step" id="step2">步驟 2：裁切名片</div>
           <div class="step" id="step3">步驟 3：輸出結果</div>
         </div>
@@ -263,9 +263,9 @@
       <section class="screen active" id="screen1">
         <div class="panel">
           <h2>先取得照片</h2>
-          <p class="desc">你可以直接拍照，或從相簿挑選一張已有的名片照片。完成後會自動進入下一步。</p>
+          <p class="desc">你可以直接拍照(建議在高對比色簡單背景拍照)。完成後會自動進入下一步。</p>
           <div class="toolbar">
-            <label for="fileInput" class="file-label primary">拍照 / 選擇照片</label>
+            <label for="fileInput" class="file-label primary">拍照</label>
             <button id="useCameraBtn" class="ghost">即時相機模式</button>
           </div>
         </div>
@@ -280,7 +280,7 @@
         <div class="toolbar two" id="editActions">
           <button id="autoDetectBtn" class="warn" disabled>自動偵測</button>
           <button id="resetCornersBtn" class="ghost" disabled>重設角點</button>
-          <button id="backToStep1Btn" class="ghost">重新選照片</button>
+          <button id="backToStep1Btn" class="ghost">重新拍照片</button>
           <button id="cropBtn" class="good" disabled>確認並裁切</button>
         </div>
         <div id="viewer" class="viewer">
