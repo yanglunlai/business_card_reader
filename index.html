@@ -1,0 +1,995 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#111111" />
+  <title>名片掃描器</title>
+  <style>
+    :root {
+      --bg: #0f1115;
+      --panel: #171a21;
+      --panel-2: #20242d;
+      --text: #f4f7fb;
+      --muted: #aab3c2;
+      --accent: #4da3ff;
+      --good: #2ecc71;
+      --warn: #ffb020;
+      --border: rgba(255,255,255,0.08);
+      --shadow: 0 12px 30px rgba(0,0,0,0.28);
+      --radius: 22px;
+    }
+
+    * { box-sizing: border-box; }
+    html, body {
+      margin: 0;
+      min-height: 100%;
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Noto Sans TC", sans-serif;
+      -webkit-tap-highlight-color: transparent;
+    }
+
+    body {
+      padding: env(safe-area-inset-top) 14px env(safe-area-inset-bottom) 20px;
+    }
+
+    .app {
+      max-width: 860px;
+      margin: 0 auto;
+    }
+
+    .shell {
+      background: linear-gradient(180deg, var(--panel), var(--panel-2));
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      overflow: hidden;
+      min-height: calc(100vh - env(safe-area-inset-top) - env(safe-area-inset-bottom) - 34px);
+      display: flex;
+      flex-direction: column;
+    }
+
+    .topbar {
+      padding: 18px 18px 10px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .title {
+      margin: 0 0 8px;
+      font-size: 1.55rem;
+      line-height: 1.2;
+    }
+
+    .subtitle {
+      margin: 0;
+      color: var(--muted);
+      font-size: 1rem;
+      line-height: 1.5;
+    }
+
+    .steps {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 8px;
+      padding: 14px 18px 0;
+    }
+
+    .step {
+      border-radius: 999px;
+      padding: 10px 12px;
+      text-align: center;
+      font-size: 0.92rem;
+      border: 1px solid var(--border);
+      color: var(--muted);
+      background: rgba(255,255,255,0.04);
+      font-weight: 700;
+    }
+
+    .step.active {
+      background: rgba(77, 163, 255, 0.18);
+      color: #fff;
+      border-color: rgba(77, 163, 255, 0.55);
+    }
+
+    .screen {
+      flex: 1;
+      padding: 18px;
+      display: none;
+    }
+
+    .screen.active {
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+
+    .panel {
+      background: rgba(255,255,255,0.03);
+      border: 1px solid var(--border);
+      border-radius: 18px;
+      padding: 16px;
+    }
+
+    h2 {
+      margin: 0 0 8px;
+      font-size: 1.2rem;
+    }
+
+    p.desc {
+      margin: 0;
+      color: var(--muted);
+      font-size: 1rem;
+      line-height: 1.5;
+    }
+
+    .toolbar {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 12px;
+      margin-top: 16px;
+    }
+
+    .toolbar.two {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    button, .file-label {
+      appearance: none;
+      border: 0;
+      border-radius: 16px;
+      padding: 18px 16px;
+      color: white;
+      background: #2b3240;
+      font-size: 1.08rem;
+      font-weight: 800;
+      min-height: 60px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      text-align: center;
+      cursor: pointer;
+      width: 100%;
+    }
+
+    button.primary, .file-label.primary { background: var(--accent); }
+    button.good { background: var(--good); }
+    button.warn { background: var(--warn); color: #1b1607; }
+    button.ghost { background: #2a2f3a; }
+    button:disabled { opacity: 0.45; cursor: not-allowed; }
+
+    #fileInput { display: none; }
+
+    .viewer {
+      position: relative;
+      background: #0a0c10;
+      aspect-ratio: 3 / 4;
+      width: 100%;
+      overflow: hidden;
+      border-radius: 16px;
+      border: 1px solid var(--border);
+      touch-action: none;
+    }
+
+    .viewer img,
+    .viewer canvas.overlay,
+    .viewer video {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+    }
+
+    .viewer img,
+    .viewer video {
+      object-fit: contain;
+      background: #0a0c10;
+      user-select: none;
+      -webkit-user-drag: none;
+    }
+
+    .hint {
+      position: absolute;
+      left: 12px;
+      right: 12px;
+      bottom: 12px;
+      padding: 10px 12px;
+      border-radius: 12px;
+      background: rgba(0,0,0,0.55);
+      color: #fff;
+      font-size: 0.95rem;
+      line-height: 1.4;
+      backdrop-filter: blur(8px);
+      z-index: 2;
+    }
+
+    .preview-box {
+      background: #fff;
+      border-radius: 16px;
+      border: 1px solid var(--border);
+      overflow: hidden;
+    }
+
+    #resultCanvas {
+      width: 100%;
+      display: block;
+      background: #fff;
+    }
+
+    .status {
+      padding: 0 18px 18px;
+      color: var(--muted);
+      font-size: 1rem;
+      line-height: 1.5;
+      min-height: 1.5em;
+      border-top: 1px solid var(--border);
+    }
+
+    .footer-note {
+      padding: 0 18px 18px;
+      color: var(--muted);
+      font-size: 0.92rem;
+      line-height: 1.5;
+    }
+
+    .hidden {
+      display: none !important;
+    }
+
+    @media (max-width: 560px) {
+      .steps { grid-template-columns: 1fr; }
+      .toolbar.two { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .title { font-size: 1.4rem; }
+      button, .file-label { font-size: 1.02rem; min-height: 58px; }
+    }
+  </style>
+  <script async src="https://docs.opencv.org/4.x/opencv.js"></script>
+</head>
+<body>
+  <div class="app">
+    <div class="shell">
+      <div class="topbar">
+        <h1 class="title" id="pageTitle">名片掃描器</h1>
+        <p class="subtitle" id="pageSubtitle">先拍照或上傳名片照片，再進行裁切，最後輸出結果。</p>
+        <div class="steps">
+          <div class="step active" id="step1">步驟 1：拍照 / 上傳</div>
+          <div class="step" id="step2">步驟 2：裁切名片</div>
+          <div class="step" id="step3">步驟 3：輸出結果</div>
+        </div>
+      </div>
+
+      <input id="fileInput" type="file" accept="image/*" capture="environment" />
+
+      <section class="screen active" id="screen1">
+        <div class="panel">
+          <h2>先取得照片</h2>
+          <p class="desc">你可以直接拍照，或從相簿挑選一張已有的名片照片。完成後會自動進入下一步。</p>
+          <div class="toolbar">
+            <label for="fileInput" class="file-label primary">拍照 / 選擇照片</label>
+            <button id="useCameraBtn" class="ghost">即時相機模式</button>
+          </div>
+        </div>
+        <div class="viewer hidden" id="cameraStage"></div>
+      </section>
+
+      <section class="screen" id="screen2">
+        <div class="panel">
+          <h2>調整名片範圍</h2>
+          <p class="desc">先試自動偵測。若結果略有偏差，再用手指拖曳四個藍色角點修正。</p>
+        </div>
+        <div class="toolbar two" id="editActions">
+          <button id="autoDetectBtn" class="warn" disabled>自動偵測</button>
+          <button id="resetCornersBtn" class="ghost" disabled>重設角點</button>
+          <button id="backToStep1Btn" class="ghost">重新選照片</button>
+          <button id="cropBtn" class="good" disabled>確認並裁切</button>
+        </div>
+        <div id="viewer" class="viewer">
+          <img id="sourceImage" alt="名片照片預覽" />
+          <canvas id="overlayCanvas" class="overlay"></canvas>
+          <div class="hint">拖曳藍色角點到名片四角。若背景簡單、邊緣清楚，自動偵測通常會更準。</div>
+        </div>
+      </section>
+
+      <section class="screen" id="screen3">
+        <div class="panel">
+          <h2>裁切完成</h2>
+          <p class="desc">這是裁切後的名片。你可以分享、儲存、下載，或回到上一步重新調整。</p>
+        </div>
+        <div class="preview-box">
+          <canvas id="resultCanvas" width="1200" height="675"></canvas>
+        </div>
+        <div class="toolbar two">
+          <button id="shareBtn" class="primary" disabled>分享 / 儲存</button>
+          <button id="downloadBtn" class="ghost" disabled>下載檔案</button>
+          <button id="openPreviewBtn" class="ghost" disabled>開啟預覽</button>
+          <button id="backToStep2Btn" class="ghost">返回重新裁切</button>
+          <button id="restartBtn" class="ghost">回到步驟一</button>
+        </div>
+      </section>
+
+      <div id="status" class="status">請先拍照或選擇一張照片。</div>
+      <div class="footer-note">在 iPhone 上可點「分享 / 儲存」，再於系統分享選單中選擇「儲存影像」或「儲存到照片」。若未顯示，也可用「開啟預覽」後長按圖片儲存。</div>
+    </div>
+  </div>
+
+  <script>
+    const fileInput = document.getElementById('fileInput');
+    const sourceImage = document.getElementById('sourceImage');
+    const viewer = document.getElementById('viewer');
+    const cameraStage = document.getElementById('cameraStage');
+    const overlayCanvas = document.getElementById('overlayCanvas');
+    const overlayCtx = overlayCanvas.getContext('2d');
+    const resultCanvas = document.getElementById('resultCanvas');
+    const resultCtx = resultCanvas.getContext('2d');
+    const statusEl = document.getElementById('status');
+    const pageTitle = document.getElementById('pageTitle');
+    const pageSubtitle = document.getElementById('pageSubtitle');
+
+    const autoDetectBtn = document.getElementById('autoDetectBtn');
+    const resetCornersBtn = document.getElementById('resetCornersBtn');
+    const cropBtn = document.getElementById('cropBtn');
+    const shareBtn = document.getElementById('shareBtn');
+    const downloadBtn = document.getElementById('downloadBtn');
+    const openPreviewBtn = document.getElementById('openPreviewBtn');
+    const useCameraBtn = document.getElementById('useCameraBtn');
+    const backToStep1Btn = document.getElementById('backToStep1Btn');
+    const backToStep2Btn = document.getElementById('backToStep2Btn');
+    const restartBtn = document.getElementById('restartBtn');
+
+    const screens = [
+      document.getElementById('screen1'),
+      document.getElementById('screen2'),
+      document.getElementById('screen3')
+    ];
+    const steps = [
+      document.getElementById('step1'),
+      document.getElementById('step2'),
+      document.getElementById('step3')
+    ];
+
+    let imageBitmap = null;
+    let originalImage = null;
+    let display = { x: 0, y: 0, width: 0, height: 0, scaleX: 1, scaleY: 1 };
+    let points = [];
+    let draggingIndex = -1;
+    let latestBlob = null;
+    let stream = null;
+    let liveVideo = null;
+    let cvReady = false;
+
+    function setStatus(message) {
+      statusEl.textContent = message;
+    }
+
+    function showStep(step) {
+      screens.forEach((screen, idx) => screen.classList.toggle('active', idx === step - 1));
+      steps.forEach((el, idx) => el.classList.toggle('active', idx === step - 1));
+
+      if (step === 1) {
+        pageTitle.textContent = '名片掃描器';
+        pageSubtitle.textContent = '先拍照或上傳名片照片，再進行裁切，最後輸出結果。';
+      } else if (step === 2) {
+        pageTitle.textContent = '裁切名片';
+        pageSubtitle.textContent = '先自動偵測，再用手指微調四角，最後確認裁切。';
+      } else {
+        pageTitle.textContent = '輸出結果';
+        pageSubtitle.textContent = '裁切完成後，可直接分享、儲存或重新調整。';
+      }
+
+      if (step !== 1) cameraStage.classList.add('hidden');
+      if (step === 2) {
+        setTimeout(resizeOverlay, 30);
+        setTimeout(resizeOverlay, 120);
+      }
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+
+    function enableEditing(enabled) {
+      autoDetectBtn.disabled = !enabled;
+      resetCornersBtn.disabled = !enabled;
+      cropBtn.disabled = !enabled;
+    }
+
+    function resizeOverlay() {
+      const rect = viewer.getBoundingClientRect();
+      if (!rect.width || !rect.height) return;
+      const dpr = window.devicePixelRatio || 1;
+      overlayCanvas.width = Math.round(rect.width * dpr);
+      overlayCanvas.height = Math.round(rect.height * dpr);
+      overlayCanvas.style.width = rect.width + 'px';
+      overlayCanvas.style.height = rect.height + 'px';
+      overlayCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      drawOverlay();
+    }
+
+    function getDisplayRect(imgW, imgH, boxW, boxH) {
+      const scale = Math.min(boxW / imgW, boxH / imgH);
+      const width = imgW * scale;
+      const height = imgH * scale;
+      return {
+        x: (boxW - width) / 2,
+        y: (boxH - height) / 2,
+        width,
+        height,
+        scaleX: imgW / width,
+        scaleY: imgH / height,
+      };
+    }
+
+    function defaultPoints() {
+      const padX = display.width * 0.12;
+      const padY = display.height * 0.25;
+      return [
+        { x: display.x + padX, y: display.y + padY },
+        { x: display.x + display.width - padX, y: display.y + padY },
+        { x: display.x + display.width - padX, y: display.y + display.height - padY },
+        { x: display.x + padX, y: display.y + display.height - padY }
+      ];
+    }
+
+    function drawOverlay() {
+      const rect = viewer.getBoundingClientRect();
+      overlayCtx.clearRect(0, 0, rect.width, rect.height);
+      if (!imageBitmap || points.length !== 4) return;
+
+      overlayCtx.save();
+      overlayCtx.fillStyle = 'rgba(0, 0, 0, 0.40)';
+      overlayCtx.fillRect(0, 0, rect.width, rect.height);
+
+      overlayCtx.beginPath();
+      overlayCtx.moveTo(points[0].x, points[0].y);
+      for (let i = 1; i < points.length; i++) overlayCtx.lineTo(points[i].x, points[i].y);
+      overlayCtx.closePath();
+      overlayCtx.save();
+      overlayCtx.globalCompositeOperation = 'destination-out';
+      overlayCtx.fill();
+      overlayCtx.restore();
+
+      overlayCtx.strokeStyle = '#4da3ff';
+      overlayCtx.lineWidth = 3;
+      overlayCtx.beginPath();
+      overlayCtx.moveTo(points[0].x, points[0].y);
+      for (let i = 1; i < points.length; i++) overlayCtx.lineTo(points[i].x, points[i].y);
+      overlayCtx.closePath();
+      overlayCtx.stroke();
+
+      points.forEach((p, i) => {
+        overlayCtx.fillStyle = '#4da3ff';
+        overlayCtx.beginPath();
+        overlayCtx.arc(p.x, p.y, 12, 0, Math.PI * 2);
+        overlayCtx.fill();
+        overlayCtx.fillStyle = '#ffffff';
+        overlayCtx.beginPath();
+        overlayCtx.arc(p.x, p.y, 4.5, 0, Math.PI * 2);
+        overlayCtx.fill();
+        overlayCtx.fillStyle = 'rgba(255,255,255,0.9)';
+        overlayCtx.font = '13px sans-serif';
+        overlayCtx.fillText(String(i + 1), p.x + 12, p.y - 12);
+      });
+
+      overlayCtx.restore();
+    }
+
+    function clampPoint(p) {
+      const minX = display.x;
+      const minY = display.y;
+      const maxX = display.x + display.width;
+      const maxY = display.y + display.height;
+      p.x = Math.max(minX, Math.min(maxX, p.x));
+      p.y = Math.max(minY, Math.min(maxY, p.y));
+      return p;
+    }
+
+    function getPointerPosition(evt) {
+      const rect = viewer.getBoundingClientRect();
+      return { x: evt.clientX - rect.left, y: evt.clientY - rect.top };
+    }
+
+    function nearestPointIndex(pos) {
+      let idx = -1;
+      let best = Infinity;
+      points.forEach((p, i) => {
+        const d = Math.hypot(p.x - pos.x, p.y - pos.y);
+        if (d < best) {
+          best = d;
+          idx = i;
+        }
+      });
+      return best <= 36 ? idx : -1;
+    }
+
+    overlayCanvas.addEventListener('pointerdown', (evt) => {
+      if (!imageBitmap || points.length !== 4) return;
+      const pos = getPointerPosition(evt);
+      draggingIndex = nearestPointIndex(pos);
+      if (draggingIndex !== -1) overlayCanvas.setPointerCapture(evt.pointerId);
+    });
+
+    overlayCanvas.addEventListener('pointermove', (evt) => {
+      if (draggingIndex === -1) return;
+      const pos = getPointerPosition(evt);
+      points[draggingIndex] = clampPoint(pos);
+      drawOverlay();
+    });
+
+    function endDrag(evt) {
+      if (draggingIndex !== -1 && evt.pointerId != null) {
+        try { overlayCanvas.releasePointerCapture(evt.pointerId); } catch (_) {}
+      }
+      draggingIndex = -1;
+    }
+
+    overlayCanvas.addEventListener('pointerup', endDrag);
+    overlayCanvas.addEventListener('pointercancel', endDrag);
+
+    function sortCorners(pts) {
+      const bySum = [...pts].sort((a, b) => (a.x + a.y) - (b.x + b.y));
+      const topLeft = bySum[0];
+      const bottomRight = bySum[3];
+      const remaining = [bySum[1], bySum[2]].sort((a, b) => (a.y - a.x) - (b.y - b.x));
+      const topRight = remaining[0].x > remaining[1].x ? remaining[0] : remaining[1];
+      const bottomLeft = remaining[0].x > remaining[1].x ? remaining[1] : remaining[0];
+      return [topLeft, topRight, bottomRight, bottomLeft];
+    }
+
+    function dist(a, b) {
+      return Math.hypot(a.x - b.x, a.y - b.y);
+    }
+
+    function toImageSpace(p) {
+      return {
+        x: (p.x - display.x) * display.scaleX,
+        y: (p.y - display.y) * display.scaleY,
+      };
+    }
+
+    function loadImageFromURL(url) {
+      return new Promise((resolve, reject) => {
+        const img = new Image();
+        img.onload = () => resolve(img);
+        img.onerror = reject;
+        img.src = url;
+      });
+    }
+
+    async function loadSelectedFile(file) {
+      stopLiveCamera();
+      latestBlob = null;
+      shareBtn.disabled = true;
+      downloadBtn.disabled = true;
+      openPreviewBtn.disabled = true;
+
+      const objectUrl = URL.createObjectURL(file);
+      const img = await loadImageFromURL(objectUrl);
+      originalImage = img;
+      imageBitmap = img;
+      sourceImage.src = objectUrl;
+
+      showStep(2);
+      const rect = viewer.getBoundingClientRect();
+      display = getDisplayRect(img.naturalWidth, img.naturalHeight, rect.width, rect.height);
+      points = defaultPoints();
+      enableEditing(true);
+      setStatus(cvReady ? '照片已載入，請先按「自動偵測」，再視需要手動微調角點。' : '照片已載入。OpenCV 尚未完成載入，也可以直接手動拖曳角點。');
+      resizeOverlay();
+    }
+
+    fileInput.addEventListener('change', async (evt) => {
+      const file = evt.target.files?.[0];
+      if (!file) return;
+      try {
+        await loadSelectedFile(file);
+      } catch (err) {
+        console.error(err);
+        setStatus('無法開啟所選圖片。');
+      }
+    });
+
+    resetCornersBtn.addEventListener('click', () => {
+      if (!imageBitmap) return;
+      points = defaultPoints();
+      drawOverlay();
+      setStatus('角點已重設。');
+    });
+
+    function detectCardWithOpenCV(img) {
+      if (!window.cv || !cvReady) return null;
+
+      const maxDim = 1200;
+      const scale = Math.min(1, maxDim / Math.max(img.naturalWidth, img.naturalHeight));
+      const w = Math.max(240, Math.round(img.naturalWidth * scale));
+      const h = Math.max(160, Math.round(img.naturalHeight * scale));
+
+      const tempCanvas = document.createElement('canvas');
+      tempCanvas.width = w;
+      tempCanvas.height = h;
+      const ctx = tempCanvas.getContext('2d');
+      ctx.drawImage(img, 0, 0, w, h);
+
+      let src = null, gray = null, blur = null, edges = null, contours = null, hierarchy = null, kernel = null;
+      try {
+        src = cv.imread(tempCanvas);
+        gray = new cv.Mat();
+        blur = new cv.Mat();
+        edges = new cv.Mat();
+        contours = new cv.MatVector();
+        hierarchy = new cv.Mat();
+
+        cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY, 0);
+        cv.GaussianBlur(gray, blur, new cv.Size(5, 5), 0, 0, cv.BORDER_DEFAULT);
+        cv.Canny(blur, edges, 50, 150, 3, false);
+        kernel = cv.Mat.ones(3, 3, cv.CV_8U);
+        cv.dilate(edges, edges, kernel, new cv.Point(-1, -1), 1);
+        cv.morphologyEx(edges, edges, cv.MORPH_CLOSE, kernel);
+        cv.findContours(edges, contours, hierarchy, cv.RETR_LIST, cv.CHAIN_APPROX_SIMPLE);
+
+        let best = null;
+        let bestScore = -Infinity;
+        const imageArea = w * h;
+
+        for (let i = 0; i < contours.size(); i++) {
+          const contour = contours.get(i);
+          const peri = cv.arcLength(contour, true);
+          const approx = new cv.Mat();
+          cv.approxPolyDP(contour, approx, 0.02 * peri, true);
+
+          if (approx.rows === 4 && cv.isContourConvex(approx)) {
+            const area = Math.abs(cv.contourArea(approx));
+            if (area >= imageArea * 0.08 && area <= imageArea * 0.98) {
+              const pts = [];
+              for (let j = 0; j < 4; j++) {
+                pts.push({ x: approx.intPtr(j, 0)[0], y: approx.intPtr(j, 0)[1] });
+              }
+              const ordered = sortCorners(pts);
+              const widthTop = dist(ordered[0], ordered[1]);
+              const widthBottom = dist(ordered[3], ordered[2]);
+              const heightLeft = dist(ordered[0], ordered[3]);
+              const heightRight = dist(ordered[1], ordered[2]);
+              const avgW = (widthTop + widthBottom) / 2;
+              const avgH = (heightLeft + heightRight) / 2;
+              const ratio = avgW / Math.max(1, avgH);
+              const ratioPenalty = Math.abs(ratio - 1.75);
+              const centerX = ordered.reduce((s, p) => s + p.x, 0) / 4;
+              const centerY = ordered.reduce((s, p) => s + p.y, 0) / 4;
+              const centerBias = 1 - (Math.hypot(centerX - w / 2, centerY - h / 2) / Math.hypot(w / 2, h / 2));
+              const areaScore = area / imageArea;
+
+              if (ratio > 1.2 && ratio < 2.3) {
+                const score = areaScore * 100 + centerBias * 12 - ratioPenalty * 10;
+                if (score > bestScore) {
+                  bestScore = score;
+                  best = ordered;
+                }
+              }
+            }
+          }
+
+          approx.delete();
+          contour.delete();
+        }
+
+        if (!best) return null;
+        return best.map(p => ({
+          x: display.x + p.x * (display.width / w),
+          y: display.y + p.y * (display.height / h)
+        }));
+      } catch (err) {
+        console.error(err);
+        return null;
+      } finally {
+        src?.delete();
+        gray?.delete();
+        blur?.delete();
+        edges?.delete();
+        contours?.delete();
+        hierarchy?.delete();
+        kernel?.delete();
+      }
+    }
+
+    autoDetectBtn.addEventListener('click', () => {
+      if (!originalImage) return;
+      setStatus('正在分析名片邊界…');
+      requestAnimationFrame(() => {
+        const detected = detectCardWithOpenCV(originalImage);
+        if (detected && detected.length === 4) {
+          points = detected.map(clampPoint);
+          drawOverlay();
+          setStatus('自動偵測完成。請檢查角點位置，必要時再手動微調。');
+        } else {
+          setStatus('這張照片未成功自動偵測到名片，請改用手動調整角點。');
+        }
+      });
+    });
+
+    function solveLinearSystem(A, b) {
+      const m = A.map((row, i) => [...row, b[i]]);
+      const n = A.length;
+      for (let col = 0; col < n; col++) {
+        let pivot = col;
+        for (let r = col + 1; r < n; r++) if (Math.abs(m[r][col]) > Math.abs(m[pivot][col])) pivot = r;
+        if (Math.abs(m[pivot][col]) < 1e-10) return null;
+        [m[col], m[pivot]] = [m[pivot], m[col]];
+        const div = m[col][col];
+        for (let c = col; c <= n; c++) m[col][c] /= div;
+        for (let r = 0; r < n; r++) {
+          if (r === col) continue;
+          const factor = m[r][col];
+          for (let c = col; c <= n; c++) m[r][c] -= factor * m[col][c];
+        }
+      }
+      return m.map(row => row[n]);
+    }
+
+    function computeHomography(src, dst) {
+      const A = [];
+      const b = [];
+      for (let i = 0; i < 4; i++) {
+        const { x, y } = src[i];
+        const u = dst[i].x;
+        const v = dst[i].y;
+        A.push([x, y, 1, 0, 0, 0, -u * x, -u * y]);
+        b.push(u);
+        A.push([0, 0, 0, x, y, 1, -v * x, -v * y]);
+        b.push(v);
+      }
+      const h = solveLinearSystem(A, b);
+      if (!h) return null;
+      return [[h[0], h[1], h[2]], [h[3], h[4], h[5]], [h[6], h[7], 1]];
+    }
+
+    function invert3x3(m) {
+      const [a,b,c] = m[0], [d,e,f] = m[1], [g,h,i] = m[2];
+      const A = e*i - f*h, B = -(d*i - f*g), C = d*h - e*g;
+      const D = -(b*i - c*h), E = a*i - c*g, F = -(a*h - b*g);
+      const G = b*f - c*e, H = -(a*f - c*d), I = a*e - b*d;
+      const det = a*A + b*B + c*C;
+      if (Math.abs(det) < 1e-10) return null;
+      return [[A/det, D/det, G/det], [B/det, E/det, H/det], [C/det, F/det, I/det]];
+    }
+
+    function mapPoint(m, x, y) {
+      const denom = m[2][0] * x + m[2][1] * y + m[2][2];
+      return {
+        x: (m[0][0] * x + m[0][1] * y + m[0][2]) / denom,
+        y: (m[1][0] * x + m[1][1] * y + m[1][2]) / denom,
+      };
+    }
+
+    function bilinearSample(src, sw, sh, x, y) {
+      const x0 = Math.max(0, Math.min(sw - 1, Math.floor(x)));
+      const y0 = Math.max(0, Math.min(sh - 1, Math.floor(y)));
+      const x1 = Math.max(0, Math.min(sw - 1, x0 + 1));
+      const y1 = Math.max(0, Math.min(sh - 1, y0 + 1));
+      const dx = x - x0;
+      const dy = y - y0;
+      const i00 = (y0 * sw + x0) * 4;
+      const i10 = (y0 * sw + x1) * 4;
+      const i01 = (y1 * sw + x0) * 4;
+      const i11 = (y1 * sw + x1) * 4;
+      const out = [0,0,0,255];
+      for (let c = 0; c < 3; c++) {
+        out[c] = src[i00 + c] * (1 - dx) * (1 - dy) + src[i10 + c] * dx * (1 - dy) + src[i01 + c] * (1 - dx) * dy + src[i11 + c] * dx * dy;
+      }
+      return out;
+    }
+
+    function enhanceCanvasImageData(ctx, w, h) {
+      const imageData = ctx.getImageData(0, 0, w, h);
+      const d = imageData.data;
+      for (let i = 0; i < d.length; i += 4) {
+        d[i] = Math.min(255, Math.max(0, (d[i] - 128) * 1.08 + 128 + 6));
+        d[i + 1] = Math.min(255, Math.max(0, (d[i + 1] - 128) * 1.08 + 128 + 6));
+        d[i + 2] = Math.min(255, Math.max(0, (d[i + 2] - 128) * 1.08 + 128 + 6));
+      }
+      ctx.putImageData(imageData, 0, 0);
+    }
+
+    cropBtn.addEventListener('click', () => {
+      if (!originalImage || points.length !== 4) return;
+      const ordered = sortCorners(points);
+      const src = ordered.map(toImageSpace);
+      const widthA = dist(src[0], src[1]);
+      const widthB = dist(src[3], src[2]);
+      const heightA = dist(src[0], src[3]);
+      const heightB = dist(src[1], src[2]);
+      const outW = Math.max(900, Math.round((widthA + widthB) / 2));
+      const outH = Math.max(500, Math.round((heightA + heightB) / 2));
+
+      resultCanvas.width = outW;
+      resultCanvas.height = outH;
+
+      const srcCanvas = document.createElement('canvas');
+      srcCanvas.width = originalImage.naturalWidth;
+      srcCanvas.height = originalImage.naturalHeight;
+      const srcCtx = srcCanvas.getContext('2d', { willReadFrequently: true });
+      srcCtx.drawImage(originalImage, 0, 0);
+      const srcData = srcCtx.getImageData(0, 0, srcCanvas.width, srcCanvas.height).data;
+
+      const dstPts = [
+        { x: 0, y: 0 },
+        { x: outW - 1, y: 0 },
+        { x: outW - 1, y: outH - 1 },
+        { x: 0, y: outH - 1 }
+      ];
+      const H = computeHomography(src, dstPts);
+      const Hinv = H ? invert3x3(H) : null;
+      if (!Hinv) {
+        setStatus('無法計算裁切幾何，請重新調整角點後再試一次。');
+        return;
+      }
+
+      const outImage = resultCtx.createImageData(outW, outH);
+      const outData = outImage.data;
+      for (let y = 0; y < outH; y++) {
+        for (let x = 0; x < outW; x++) {
+          const sp = mapPoint(Hinv, x, y);
+          const px = bilinearSample(srcData, srcCanvas.width, srcCanvas.height, sp.x, sp.y);
+          const idx = (y * outW + x) * 4;
+          outData[idx] = px[0];
+          outData[idx + 1] = px[1];
+          outData[idx + 2] = px[2];
+          outData[idx + 3] = 255;
+        }
+      }
+      resultCtx.putImageData(outImage, 0, 0);
+      enhanceCanvasImageData(resultCtx, outW, outH);
+      resultCanvas.toBlob((blob) => {
+        latestBlob = blob;
+        const ready = !!blob;
+        shareBtn.disabled = !ready;
+        downloadBtn.disabled = !ready;
+        openPreviewBtn.disabled = !ready;
+        showStep(3);
+        setStatus(ready ? '名片已裁切完成，可直接分享或儲存。' : '裁切完成，但輸出失敗。');
+      }, 'image/jpeg', 0.95);
+    });
+
+    shareBtn.addEventListener('click', async () => {
+      if (!latestBlob) return;
+      const file = new File([latestBlob], `business-card-${Date.now()}.jpg`, { type: 'image/jpeg' });
+      try {
+        if (navigator.canShare && navigator.share && navigator.canShare({ files: [file] })) {
+          await navigator.share({ files: [file], title: '名片', text: '已裁切的名片影像' });
+          setStatus('已開啟分享。請在 iPhone 分享選單中選擇「儲存影像」或「儲存到照片」。');
+        } else {
+          setStatus('目前瀏覽器不支援檔案分享，請改用「開啟預覽」後長按圖片儲存。');
+        }
+      } catch (err) {
+        if (err && err.name !== 'AbortError') {
+          console.error(err);
+          setStatus('分享未完成，仍可改用下載或預覽。');
+        }
+      }
+    });
+
+    downloadBtn.addEventListener('click', () => {
+      if (!latestBlob) return;
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(latestBlob);
+      a.download = `business-card-${Date.now()}.jpg`;
+      a.click();
+      setStatus('檔案已下載。在 iPhone 上通常會存到「檔案」App。');
+    });
+
+    openPreviewBtn.addEventListener('click', () => {
+      if (!latestBlob) return;
+      const url = URL.createObjectURL(latestBlob);
+      const w = window.open('', '_blank');
+      if (!w) {
+        setStatus('彈出視窗被阻擋。請允許彈出視窗，或改用「分享 / 儲存」。');
+        return;
+      }
+      w.document.write(`<!doctype html><html><head><meta name="viewport" content="width=device-width, initial-scale=1" /><title>預覽</title><style>body{margin:0;background:#111;display:grid;place-items:center;min-height:100vh}img{max-width:100vw;max-height:100vh;height:auto;width:auto}</style></head><body><img src="${url}" alt="裁切後名片" /></body></html>`);
+      w.document.close();
+      setStatus('已開啟預覽。在 iPhone Safari 中可長按圖片進行儲存。');
+    });
+
+    backToStep1Btn.addEventListener('click', () => {
+      showStep(1);
+      setStatus('你可以重新拍照或選擇另一張照片。');
+    });
+
+    backToStep2Btn.addEventListener('click', () => {
+      showStep(2);
+      setStatus('你可以重新調整角點後再次裁切。');
+      setTimeout(resizeOverlay, 60);
+    });
+
+    restartBtn.addEventListener('click', () => {
+      stopLiveCamera();
+      showStep(1);
+      setStatus('已回到步驟一，你可以重新拍照或選擇另一張照片。');
+    });
+
+    async function startLiveCamera() {
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        setStatus('此瀏覽器無法使用即時相機，請改用拍照 / 選擇照片。');
+        return;
+      }
+      try {
+        stopLiveCamera();
+        stream = await navigator.mediaDevices.getUserMedia({
+          video: {
+            facingMode: { ideal: 'environment' },
+            width: { ideal: 1920 },
+            height: { ideal: 1080 }
+          },
+          audio: false
+        });
+
+        liveVideo = document.createElement('video');
+        liveVideo.playsInline = true;
+        liveVideo.autoplay = true;
+        liveVideo.muted = true;
+        liveVideo.srcObject = stream;
+        await liveVideo.play();
+
+        cameraStage.classList.remove('hidden');
+        cameraStage.innerHTML = '';
+        cameraStage.appendChild(liveVideo);
+        liveVideo.style.objectFit = 'cover';
+
+        const hint = document.createElement('div');
+        hint.className = 'hint';
+        hint.textContent = '請將名片置中，盡量讓背景單純、避免陰影，再按下「擷取畫面」。';
+        cameraStage.appendChild(hint);
+
+        const snap = document.createElement('button');
+        snap.textContent = '擷取畫面';
+        snap.className = 'primary';
+        snap.style.position = 'absolute';
+        snap.style.left = '50%';
+        snap.style.bottom = '14px';
+        snap.style.transform = 'translateX(-50%)';
+        snap.style.zIndex = '3';
+        snap.onclick = async () => {
+          const c = document.createElement('canvas');
+          c.width = liveVideo.videoWidth;
+          c.height = liveVideo.videoHeight;
+          c.getContext('2d').drawImage(liveVideo, 0, 0);
+          const blob = await new Promise(resolve => c.toBlob(resolve, 'image/jpeg', 0.95));
+          const file = new File([blob], 'capture.jpg', { type: 'image/jpeg' });
+          await loadSelectedFile(file);
+        };
+        cameraStage.appendChild(snap);
+        setStatus('即時相機已啟動。請對準名片後點「擷取畫面」。');
+      } catch (err) {
+        console.error(err);
+        setStatus('無法啟動即時相機，請改用拍照 / 選擇照片。');
+      }
+    }
+
+    function stopLiveCamera() {
+      if (stream) {
+        stream.getTracks().forEach(track => track.stop());
+        stream = null;
+      }
+      if (liveVideo) {
+        liveVideo.pause?.();
+        liveVideo.srcObject = null;
+        liveVideo = null;
+      }
+      cameraStage.innerHTML = '';
+      cameraStage.classList.add('hidden');
+    }
+
+    useCameraBtn.addEventListener('click', startLiveCamera);
+    window.addEventListener('resize', resizeOverlay);
+
+    window.Module = {
+      onRuntimeInitialized() {
+        cvReady = true;
+        if (!originalImage) setStatus('OpenCV 已載入。請先拍照或選擇照片。');
+      }
+    };
+
+    const cvWait = setInterval(() => {
+      if (window.cv && typeof cv.Mat === 'function') {
+        clearInterval(cvWait);
+        cvReady = true;
+      }
+    }, 500);
+  </script>
+</body>
+</html>
