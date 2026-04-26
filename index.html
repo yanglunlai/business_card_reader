@@ -277,7 +277,7 @@
       <section class="screen" id="screen2">
         <div class="panel">
           <h2>調整文件範圍</h2>
-          <p class="desc">先試自動偵測。若結果略有偏差，再用手指拖曳四個藍色角點修正。</p>
+          <p class="desc">先按自動偵測試試看。若結果略有偏差，再用手指拖曳四個藍色角點修正。</p>
         </div>
         <div class="toolbar two" id="editActions">
           <button id="autoDetectBtn" class="warn" disabled>自動偵測</button>
@@ -295,14 +295,13 @@
       <section class="screen" id="screen3">
         <div class="panel">
           <h2>裁切完成</h2>
-          <p class="desc">這是裁切後的文件。你可以分享、儲存、下載，或回到上一步重新調整。</p>
+          <p class="desc">這是裁切後的文件。你可以分享、儲存，或回到上一步重新調整。</p>
         </div>
         <div class="preview-box">
           <canvas id="resultCanvas" width="1200" height="675"></canvas>
         </div>
         <div class="toolbar two">
           <button id="shareBtn" class="primary" disabled>分享 / 儲存</button>
-          <button id="downloadBtn" class="ghost" disabled>下載檔案</button>
           <button id="openPreviewBtn" class="ghost" disabled>開啟預覽</button>
           <button id="backToStep2Btn" class="ghost">返回重新裁切</button>
           <button id="restartBtn" class="ghost">回到步驟一</button>
@@ -331,7 +330,6 @@
     const resetCornersBtn = document.getElementById('resetCornersBtn');
     const cropBtn = document.getElementById('cropBtn');
     const shareBtn = document.getElementById('shareBtn');
-    const downloadBtn = document.getElementById('downloadBtn');
     const openPreviewBtn = document.getElementById('openPreviewBtn');
     const useCameraBtn = document.getElementById('useCameraBtn');
     const backToStep1Btn = document.getElementById('backToStep1Btn');
@@ -630,7 +628,6 @@
       stopLiveCamera();
       latestBlob = null;
       shareBtn.disabled = true;
-      downloadBtn.disabled = true;
       openPreviewBtn.disabled = true;
 
       const objectUrl = URL.createObjectURL(file);
@@ -918,7 +915,6 @@
         latestBlob = blob;
         const ready = !!blob;
         shareBtn.disabled = !ready;
-        downloadBtn.disabled = !ready;
         openPreviewBtn.disabled = !ready;
         showStep(3);
         setStatus(ready ? '文件已裁切完成，可直接分享或儲存。' : '裁切完成，但輸出失敗。');
@@ -943,25 +939,14 @@
       }
     });
 
-    downloadBtn.addEventListener('click', () => {
-      if (!latestBlob) return;
-      const a = document.createElement('a');
-      a.href = URL.createObjectURL(latestBlob);
-      a.download = `document-${Date.now()}.jpg`;
-      a.click();
-      setStatus('檔案已下載。在 iPhone 上通常會存到「檔案」App。');
-    });
-
     openPreviewBtn.addEventListener('click', () => {
       if (!latestBlob) return;
       const url = URL.createObjectURL(latestBlob);
-      const w = window.open('', '_blank');
+      const w = window.open(url, '_blank');
       if (!w) {
         setStatus('彈出視窗被阻擋。請允許彈出視窗，或改用「分享 / 儲存」。');
         return;
       }
-      w.document.write(`<!doctype html><html><head><meta name="viewport" content="width=device-width, initial-scale=1" /><title>預覽</title><style>body{margin:0;background:#111;display:grid;place-items:center;min-height:100vh}img{max-width:100vw;max-height:100vh;height:auto;width:auto}</style></head><body><img src="${url}" alt="裁切後文件" /></body></html>`);
-      w.document.close();
       setStatus('已開啟預覽。在 iPhone Safari 中可長按圖片進行儲存。');
     });
 
