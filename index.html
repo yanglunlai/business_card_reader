@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <meta name="theme-color" content="#111111" />
-  <title>名片文件掃描器</title>
+  <title>文件掃描器</title>
   <style>
     :root {
       --bg: #0f1115;
@@ -243,17 +243,19 @@
       button, .file-label { font-size: 1.02rem; min-height: 58px; }
     }
   </style>
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.15.0/dist/tf.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd@2.2.2/dist/coco-ssd.min.js"></script>
   <script async src="https://docs.opencv.org/4.x/opencv.js"></script>
 </head>
 <body>
   <div class="app">
     <div class="shell">
       <div class="topbar">
-        <h1 class="title" id="pageTitle">名片掃描器</h1>
-        <p class="subtitle" id="pageSubtitle">先拍名片照片，再進行裁切，最後輸出結果。</p>
+        <h1 class="title" id="pageTitle">文件掃描器</h1>
+        <p class="subtitle" id="pageSubtitle">先拍文件照片，再進行裁切，最後輸出結果。</p>
         <div class="steps">
           <div class="step active" id="step1">步驟 1：拍照</div>
-          <div class="step" id="step2">步驟 2：裁切名片</div>
+          <div class="step" id="step2">步驟 2：裁切文件</div>
           <div class="step" id="step3">步驟 3：輸出結果</div>
         </div>
       </div>
@@ -274,7 +276,7 @@
 
       <section class="screen" id="screen2">
         <div class="panel">
-          <h2>調整名片範圍</h2>
+          <h2>調整文件範圍</h2>
           <p class="desc">先試自動偵測。若結果略有偏差，再用手指拖曳四個藍色角點修正。</p>
         </div>
         <div class="toolbar two" id="editActions">
@@ -284,16 +286,16 @@
           <button id="cropBtn" class="good" disabled>確認並裁切</button>
         </div>
         <div id="viewer" class="viewer">
-          <img id="sourceImage" alt="名片照片預覽" />
+          <img id="sourceImage" alt="文件照片預覽" />
           <canvas id="overlayCanvas" class="overlay"></canvas>
-          <div class="hint">拖曳藍色角點到名片四角。若背景簡單、邊緣清楚，自動偵測通常會更準。</div>
+          <div class="hint">拖曳藍色角點到文件四角。若背景簡單、邊緣清楚，自動偵測通常會更準。</div>
         </div>
       </section>
 
       <section class="screen" id="screen3">
         <div class="panel">
           <h2>裁切完成</h2>
-          <p class="desc">這是裁切後的名片。你可以分享、儲存、下載，或回到上一步重新調整。</p>
+          <p class="desc">這是裁切後的文件。你可以分享、儲存、下載，或回到上一步重新調整。</p>
         </div>
         <div class="preview-box">
           <canvas id="resultCanvas" width="1200" height="675"></canvas>
@@ -305,10 +307,10 @@
           <button id="backToStep2Btn" class="ghost">返回重新裁切</button>
           <button id="restartBtn" class="ghost">回到步驟一</button>
         </div>
+        <div class="footer-note">在 iPhone 上可點「分享 / 儲存」，再於系統分享選單中選擇「儲存影像」或「儲存到照片」。若未顯示，也可用「開啟預覽」後長按圖片儲存。</div>
       </section>
 
       <div id="status" class="status">請先拍照或選擇一張照片。</div>
-      <div class="footer-note">在 iPhone 上可點「分享 / 儲存」，再於系統分享選單中選擇「儲存影像」或「儲存到照片」。若未顯示，也可用「開啟預覽」後長按圖片儲存。</div>
     </div>
   </div>
 
@@ -356,6 +358,8 @@
     let stream = null;
     let liveVideo = null;
     let cvReady = false;
+    let tfDetector = null;
+    let tfReady = false;
 
     function setStatus(message) {
       statusEl.textContent = message;
@@ -366,10 +370,10 @@
       steps.forEach((el, idx) => el.classList.toggle('active', idx === step - 1));
 
       if (step === 1) {
-        pageTitle.textContent = '名片掃描器';
-        pageSubtitle.textContent = '先拍照或上傳名片照片，再進行裁切，最後輸出結果。';
+        pageTitle.textContent = '文件掃描器';
+        pageSubtitle.textContent = '先拍照或上傳文件照片，再進行裁切，最後輸出結果。';
       } else if (step === 2) {
-        pageTitle.textContent = '裁切名片';
+        pageTitle.textContent = '裁切文件';
         pageSubtitle.textContent = '先自動偵測，再用手指微調四角，最後確認裁切。';
       } else {
         pageTitle.textContent = '輸出結果';
@@ -388,6 +392,76 @@
       autoDetectBtn.disabled = !enabled;
       resetCornersBtn.disabled = !enabled;
       cropBtn.disabled = !enabled;
+    }
+
+    function updateLibraryStatus() {
+      if (!originalImage) {
+        if (cvReady && tfReady) {
+          setStatus('OpenCV 與 TensorFlow.js 已載入。請先拍照或選擇照片。');
+        } else if (cvReady) {
+          setStatus('OpenCV 已載入。正在載入 TensorFlow.js…');
+        } else if (tfReady) {
+          setStatus('TensorFlow.js 已載入。正在等待 OpenCV…');
+        }
+      }
+    }
+
+    function mapRegionToDisplayPoints(region) {
+      return [
+        { x: display.x + region.x * display.width / originalImage.naturalWidth, y: display.y + region.y * display.height / originalImage.naturalHeight },
+        { x: display.x + (region.x + region.width) * display.width / originalImage.naturalWidth, y: display.y + region.y * display.height / originalImage.naturalHeight },
+        { x: display.x + (region.x + region.width) * display.width / originalImage.naturalWidth, y: display.y + (region.y + region.height) * display.height / originalImage.naturalHeight },
+        { x: display.x + region.x * display.width / originalImage.naturalWidth, y: display.y + (region.y + region.height) * display.height / originalImage.naturalHeight }
+      ];
+    }
+
+    async function detectDocumentRegionWithTF(img) {
+      if (!tfReady || !tfDetector) return null;
+      try {
+        const predictions = await tfDetector.detect(img, 6);
+        if (!predictions || !predictions.length) return null;
+
+        const width = img.naturalWidth;
+        const height = img.naturalHeight;
+        let best = null;
+
+        for (const pred of predictions) {
+          if (pred.score < 0.30) continue;
+          const [x, y, w, h] = pred.bbox;
+          const area = w * h;
+          if (area < width * height * 0.02 || area > width * height * 0.95) continue;
+          const ratio = w / Math.max(1, h);
+          if (ratio < 0.8 || ratio > 2.8) continue;
+
+          const centerDist = Math.hypot((x + w / 2) - width / 2, (y + h / 2) - height / 2);
+          const centerBias = 1 - centerDist / Math.hypot(width / 2, height / 2);
+          const bonus = (pred.class === 'book' || pred.class === 'cell phone' || pred.class === 'laptop') ? 12 : 0;
+          const score = pred.score * 100 + centerBias * 15 + bonus - Math.abs(ratio - 1.75) * 10;
+
+          if (!best || score > best.score) {
+            best = { bbox: pred.bbox, score };
+          }
+        }
+
+        return best ? { x: best.bbox[0], y: best.bbox[1], width: best.bbox[2], height: best.bbox[3] } : null;
+      } catch (err) {
+        console.error('TensorFlow detector error:', err);
+        return null;
+      }
+    }
+
+    async function loadTfModel() {
+      if (typeof cocoSsd === 'undefined' || !cocoSsd.load) {
+        console.warn('TensorFlow.js 模型載入失敗。');
+        return;
+      }
+      try {
+        tfDetector = await cocoSsd.load();
+        tfReady = true;
+        updateLibraryStatus();
+      } catch (err) {
+        console.error('TensorFlow model load error:', err);
+      }
     }
 
     function resizeOverlay() {
@@ -568,9 +642,15 @@
       showStep(2);
       const rect = viewer.getBoundingClientRect();
       display = getDisplayRect(img.naturalWidth, img.naturalHeight, rect.width, rect.height);
-      points = defaultPoints();
+      const tfRegion = await detectDocumentRegionWithTF(img);
+      if (tfRegion) {
+        points = mapRegionToDisplayPoints(tfRegion).map(clampPoint);
+        setStatus('模型已偵測到文件範圍，請檢查角點並按「自動偵測」或直接裁切。');
+      } else {
+        points = defaultPoints();
+        setStatus(cvReady ? '照片已載入，請先按「自動偵測」，再視需要手動微調角點。' : '照片已載入。OpenCV 尚未完成載入，也可以直接手動拖曳角點。');
+      }
       enableEditing(true);
-      setStatus(cvReady ? '照片已載入，請先按「自動偵測」，再視需要手動微調角點。' : '照片已載入。OpenCV 尚未完成載入，也可以直接手動拖曳角點。');
       resizeOverlay();
     }
 
@@ -592,7 +672,7 @@
       setStatus('角點已重設。');
     });
 
-    function detectCardWithOpenCV(img) {
+    function detectDocumentWithOpenCV(img) {
       if (!window.cv || !cvReady) return null;
 
       const maxDim = 1200;
@@ -689,15 +769,15 @@
 
     autoDetectBtn.addEventListener('click', () => {
       if (!originalImage) return;
-      setStatus('正在分析名片邊界…');
+      setStatus('正在分析文件邊界…');
       requestAnimationFrame(() => {
-        const detected = detectCardWithOpenCV(originalImage);
+        const detected = detectDocumentWithOpenCV(originalImage);
         if (detected && detected.length === 4) {
           points = detected.map(clampPoint);
           drawOverlay();
           setStatus('自動偵測完成。請檢查角點位置，必要時再手動微調。');
         } else {
-          setStatus('這張照片未成功自動偵測到名片，請改用手動調整角點。');
+          setStatus('這張照片未成功自動偵測到文件，請改用手動調整角點。');
         }
       });
     });
@@ -841,16 +921,16 @@
         downloadBtn.disabled = !ready;
         openPreviewBtn.disabled = !ready;
         showStep(3);
-        setStatus(ready ? '名片已裁切完成，可直接分享或儲存。' : '裁切完成，但輸出失敗。');
+        setStatus(ready ? '文件已裁切完成，可直接分享或儲存。' : '裁切完成，但輸出失敗。');
       }, 'image/jpeg', 0.95);
     });
 
     shareBtn.addEventListener('click', async () => {
       if (!latestBlob) return;
-      const file = new File([latestBlob], `business-card-${Date.now()}.jpg`, { type: 'image/jpeg' });
+      const file = new File([latestBlob], `document-${Date.now()}.jpg`, { type: 'image/jpeg' });
       try {
         if (navigator.canShare && navigator.share && navigator.canShare({ files: [file] })) {
-          await navigator.share({ files: [file], title: '名片', text: '已裁切的名片影像' });
+          await navigator.share({ files: [file], title: '文件', text: '已裁切的文件影像' });
           setStatus('已開啟分享。請在 iPhone 分享選單中選擇「儲存影像」或「儲存到照片」。');
         } else {
           setStatus('目前瀏覽器不支援檔案分享，請改用「開啟預覽」後長按圖片儲存。');
@@ -867,7 +947,7 @@
       if (!latestBlob) return;
       const a = document.createElement('a');
       a.href = URL.createObjectURL(latestBlob);
-      a.download = `business-card-${Date.now()}.jpg`;
+      a.download = `document-${Date.now()}.jpg`;
       a.click();
       setStatus('檔案已下載。在 iPhone 上通常會存到「檔案」App。');
     });
@@ -880,7 +960,7 @@
         setStatus('彈出視窗被阻擋。請允許彈出視窗，或改用「分享 / 儲存」。');
         return;
       }
-      w.document.write(`<!doctype html><html><head><meta name="viewport" content="width=device-width, initial-scale=1" /><title>預覽</title><style>body{margin:0;background:#111;display:grid;place-items:center;min-height:100vh}img{max-width:100vw;max-height:100vh;height:auto;width:auto}</style></head><body><img src="${url}" alt="裁切後名片" /></body></html>`);
+      w.document.write(`<!doctype html><html><head><meta name="viewport" content="width=device-width, initial-scale=1" /><title>預覽</title><style>body{margin:0;background:#111;display:grid;place-items:center;min-height:100vh}img{max-width:100vw;max-height:100vh;height:auto;width:auto}</style></head><body><img src="${url}" alt="裁切後文件" /></body></html>`);
       w.document.close();
       setStatus('已開啟預覽。在 iPhone Safari 中可長按圖片進行儲存。');
     });
@@ -932,7 +1012,7 @@
 
         const hint = document.createElement('div');
         hint.className = 'hint';
-        hint.textContent = '請將名片置中，盡量讓背景單純、避免陰影，再按下「擷取畫面」。';
+        hint.textContent = '請將文件置中，盡量讓背景單純、避免陰影，再按下「擷取畫面」。';
         cameraStage.appendChild(hint);
 
         const snap = document.createElement('button');
@@ -953,7 +1033,7 @@
           await loadSelectedFile(file);
         };
         cameraStage.appendChild(snap);
-        setStatus('即時相機已啟動。請對準名片後點「擷取畫面」。');
+        setStatus('即時相機已啟動。請對準文件後點「擷取畫面」。');
       } catch (err) {
         console.error(err);
         setStatus('無法啟動即時相機，請改用拍照 / 選擇照片。');
@@ -990,6 +1070,8 @@
         cvReady = true;
       }
     }, 500);
+
+    loadTfModel();
   </script>
 </body>
 </html>
