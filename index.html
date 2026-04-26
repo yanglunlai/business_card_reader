@@ -243,9 +243,8 @@
       button, .file-label { font-size: 1.02rem; min-height: 58px; }
     }
   </style>
-  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.15.0/dist/tf.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd@2.2.2/dist/coco-ssd.min.js"></script>
   <script async src="https://docs.opencv.org/4.x/opencv.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/jscanify@1.2.0/dist/jscanify.min.js"></script>
 </head>
 <body>
   <div class="app">
@@ -356,8 +355,6 @@
     let stream = null;
     let liveVideo = null;
     let cvReady = false;
-    let tfDetector = null;
-    let tfReady = false;
 
     function setStatus(message) {
       statusEl.textContent = message;
@@ -394,12 +391,8 @@
 
     function updateLibraryStatus() {
       if (!originalImage) {
-        if (cvReady && tfReady) {
-          setStatus('基本系統(OpenCV) 與 AI 模型已載入。請先拍照或選擇照片。');
-        } else if (cvReady) {
-          setStatus('基本系統(OpenCV) 已載入。正在載入 AI 模型…');
-        } else if (tfReady) {
-          setStatus('AI 模型已載入。正在等待基本系統(OpenCV)…');
+        if (cvReady) {
+          setStatus('基本系統(OpenCV) 已載入。文件偵測工具已就緒，請先拍照或選擇照片。');
         }
       }
     }
@@ -412,61 +405,23 @@
         { x: display.x + region.x * display.width / originalImage.naturalWidth, y: display.y + (region.y + region.height) * display.height / originalImage.naturalHeight }
       ];
     }
-
-    async function detectDocumentRegionWithTF(img) {
-      if (!tfReady || !tfDetector) return null;
+    async function detectWithJscanify(img) {
       try {
-        const predictions = await tfDetector.detect(img, 6);
-        if (!predictions || !predictions.length) return null;
+        const scanner = new jscanify();
+        const result = scanner.findPaperContour(img);
 
-        const width = img.naturalWidth;
-        const height = img.naturalHeight;
-        let best = null;
+        if (!result || result.length !== 4) return null;
 
-        for (const pred of predictions) {
-          if (pred.score < 0.30) continue;
-          const [x, y, w, h] = pred.bbox;
-          const area = w * h;
-          if (area < width * height * 0.02 || area > width * height * 0.95) continue;
-          const ratio = w / Math.max(1, h);
-          if (ratio < 0.8 || ratio > 2.8) continue;
-
-          const centerDist = Math.hypot((x + w / 2) - width / 2, (y + h / 2) - height / 2);
-          const centerBias = 1 - centerDist / Math.hypot(width / 2, height / 2);
-          const bonus = (pred.class === 'book' || pred.class === 'cell phone' || pred.class === 'laptop') ? 12 : 0;
-          const score = pred.score * 100 + centerBias * 15 + bonus - Math.abs(ratio - 1.75) * 10;
-
-          if (!best || score > best.score) {
-            best = { bbox: pred.bbox, score };
-          }
-        }
-
-        return best ? { x: best.bbox[0], y: best.bbox[1], width: best.bbox[2], height: best.bbox[3] } : null;
+        return result.map(p => ({
+          x: display.x + p.x * (display.width / img.naturalWidth),
+          y: display.y + p.y * (display.height / img.naturalHeight)
+        }));
       } catch (err) {
-        console.error('TensorFlow detector error:', err);
+        console.warn('Jscanify failed:', err);
         return null;
       }
     }
-
-    async function loadTfModel() {
-      if (typeof cocoSsd === 'undefined' || !cocoSsd.load) {
-        console.warn('AI 模型載入失敗。');
-        if (!originalImage) {
-          setStatus('AI 模型載入失敗，將以基本系統(OpenCV) 進行偵測。');
-        }
-        return;
-      }
-      try {
-        tfDetector = await cocoSsd.load();
-        tfReady = true;
-        updateLibraryStatus();
-      } catch (err) {
-        console.error('AI 模型載入錯誤:', err);
-        if (!originalImage) {
-          setStatus('AI 模型載入失敗，將以基本系統(OpenCV) 進行偵測。');
-        }
-      }
-    }
+    // TensorFlow deep model detection has been disabled in favor of jscanify + OpenCV.
 
     function resizeOverlay() {
       const rect = viewer.getBoundingClientRect();
@@ -645,10 +600,10 @@
       showStep(2);
       const rect = viewer.getBoundingClientRect();
       display = getDisplayRect(img.naturalWidth, img.naturalHeight, rect.width, rect.height);
-      const tfRegion = await detectDocumentRegionWithTF(img);
-      if (tfRegion) {
-        points = mapRegionToDisplayPoints(tfRegion).map(clampPoint);
-        setStatus('模型已偵測到文件範圍，請檢查角點並按「自動偵測」或直接裁切。');
+      const detected = await detectWithJscanify(img);
+      if (detected && detected.length === 4) {
+        points = detected.map(clampPoint);
+        setStatus('文件輪廓已自動偵測，請檢查角點並按「自動偵測」或直接裁切。');
       } else {
         points = defaultPoints();
         setStatus(cvReady ? '照片已載入，請先按「自動偵測」，再視需要手動微調角點。' : '照片已載入。基本系統(OpenCV) 尚未完成載入，也可以直接手動拖曳角點。');
@@ -769,20 +724,28 @@
         kernel?.delete();
       }
     }
-
-    autoDetectBtn.addEventListener('click', () => {
+    autoDetectBtn.addEventListener('click', async () => {
       if (!originalImage) return;
-      setStatus('正在分析文件邊界…');
-      requestAnimationFrame(() => {
-        const detected = detectDocumentWithOpenCV(originalImage);
-        if (detected && detected.length === 4) {
-          points = detected.map(clampPoint);
-          drawOverlay();
-          setStatus('自動偵測完成。請檢查角點位置，必要時再手動微調。');
-        } else {
-          setStatus('這張照片未成功自動偵測到文件，請改用手動調整角點。');
-        }
-      });
+
+      setStatus('正在以智慧文件偵測引擎分析邊界…');
+
+      await new Promise(r => requestAnimationFrame(r));
+
+      // ① Jscanify FIRST
+      let detected = await detectWithJscanify(originalImage);
+
+      // ② fallback to OpenCV
+      if (!detected) {
+        detected = detectDocumentWithOpenCV(originalImage);
+      }
+
+      if (detected && detected.length === 4) {
+        points = detected.map(clampPoint);
+        drawOverlay();
+        setStatus('文件邊界偵測完成。請檢查角點，必要時微調。');
+      } else {
+        setStatus('無法自動偵測文件，請手動調整角點。');
+      }
     });
 
     function solveLinearSystem(A, b) {
@@ -1052,8 +1015,8 @@
       onRuntimeInitialized() {
         cvReady = true;
         updateLibraryStatus();
-        if (!originalImage && !tfReady) {
-          setStatus('基本系統(OpenCV) 已載入。正在載入 AI 模型…');
+        if (!originalImage) {
+          setStatus('基本系統(OpenCV) 已載入。文件偵測工具已就緒。請先拍照或選擇照片。');
         }
       }
     };
@@ -1065,8 +1028,6 @@
         updateLibraryStatus();
       }
     }, 500);
-
-    loadTfModel();
   </script>
 </body>
 </html>
