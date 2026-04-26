@@ -395,11 +395,11 @@
     function updateLibraryStatus() {
       if (!originalImage) {
         if (cvReady && tfReady) {
-          setStatus('OpenCV 與 TensorFlow.js 已載入。請先拍照或選擇照片。');
+          setStatus('基本系統(OpenCV) 與 AI 模型已載入。請先拍照或選擇照片。');
         } else if (cvReady) {
-          setStatus('OpenCV 已載入。正在載入 TensorFlow.js…');
+          setStatus('基本系統(OpenCV) 已載入。正在載入 AI 模型…');
         } else if (tfReady) {
-          setStatus('TensorFlow.js 已載入。正在等待 OpenCV…');
+          setStatus('AI 模型已載入。正在等待基本系統(OpenCV)…');
         }
       }
     }
@@ -450,7 +450,10 @@
 
     async function loadTfModel() {
       if (typeof cocoSsd === 'undefined' || !cocoSsd.load) {
-        console.warn('TensorFlow.js 模型載入失敗。');
+        console.warn('AI 模型載入失敗。');
+        if (!originalImage) {
+          setStatus('AI 模型載入失敗，將以基本系統(OpenCV) 進行偵測。');
+        }
         return;
       }
       try {
@@ -458,7 +461,10 @@
         tfReady = true;
         updateLibraryStatus();
       } catch (err) {
-        console.error('TensorFlow model load error:', err);
+        console.error('AI 模型載入錯誤:', err);
+        if (!originalImage) {
+          setStatus('AI 模型載入失敗，將以基本系統(OpenCV) 進行偵測。');
+        }
       }
     }
 
@@ -645,7 +651,7 @@
         setStatus('模型已偵測到文件範圍，請檢查角點並按「自動偵測」或直接裁切。');
       } else {
         points = defaultPoints();
-        setStatus(cvReady ? '照片已載入，請先按「自動偵測」，再視需要手動微調角點。' : '照片已載入。OpenCV 尚未完成載入，也可以直接手動拖曳角點。');
+        setStatus(cvReady ? '照片已載入，請先按「自動偵測」，再視需要手動微調角點。' : '照片已載入。基本系統(OpenCV) 尚未完成載入，也可以直接手動拖曳角點。');
       }
       enableEditing(true);
       resizeOverlay();
@@ -1045,7 +1051,10 @@
     window.Module = {
       onRuntimeInitialized() {
         cvReady = true;
-        if (!originalImage) setStatus('OpenCV 已載入。請先拍照或選擇照片。');
+        updateLibraryStatus();
+        if (!originalImage && !tfReady) {
+          setStatus('基本系統(OpenCV) 已載入。正在載入 AI 模型…');
+        }
       }
     };
 
@@ -1053,6 +1062,7 @@
       if (window.cv && typeof cv.Mat === 'function') {
         clearInterval(cvWait);
         cvReady = true;
+        updateLibraryStatus();
       }
     }, 500);
 
