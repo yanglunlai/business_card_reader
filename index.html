@@ -406,19 +406,33 @@
       ];
     }
     async function detectWithJscanify(img) {
+      if (typeof jscanify === 'undefined') return null;
+      if (!window.cv || !cvReady || typeof cv.Mat !== 'function') return null;
+
+      let contour = null;
       try {
         const scanner = new jscanify();
-        const result = scanner.findPaperContour(img);
+        contour = scanner.findPaperContour(img);
+        if (!contour) return null;
 
-        if (!result || result.length !== 4) return null;
+        const corners = scanner.getCornerPoints(contour, img);
+        if (!corners) return null;
 
-        return result.map(p => ({
-          x: display.x + p.x * (display.width / img.naturalWidth),
-          y: display.y + p.y * (display.height / img.naturalHeight)
+        const { topLeftCorner, topRightCorner, bottomRightCorner, bottomLeftCorner } = corners;
+        const ordered = [topLeftCorner, topRightCorner, bottomRightCorner, bottomLeftCorner];
+        if (ordered.some(p => !p || typeof p.x !== 'number' || typeof p.y !== 'number')) return null;
+
+        const sx = display.width / img.naturalWidth;
+        const sy = display.height / img.naturalHeight;
+        return ordered.map(p => ({
+          x: display.x + p.x * sx,
+          y: display.y + p.y * sy,
         }));
       } catch (err) {
         console.warn('Jscanify failed:', err);
         return null;
+      } finally {
+        try { contour?.delete?.(); } catch (_) {}
       }
     }
     // TensorFlow deep model detection has been disabled in favor of jscanify + OpenCV.
@@ -1011,21 +1025,32 @@
     useCameraBtn.addEventListener('click', startLiveCamera);
     window.addEventListener('resize', resizeOverlay);
 
-    window.Module = {
-      onRuntimeInitialized() {
-        cvReady = true;
-        updateLibraryStatus();
-        if (!originalImage) {
-          setStatus('基本系統(OpenCV) 已載入。文件偵測工具已就緒。請先拍照或選擇照片。');
+    async function onCvReady() {
+      cvReady = true;
+      updateLibraryStatus();
+      if (!originalImage) {
+        setStatus('基本系統(OpenCV) 已載入。文件偵測工具已就緒。請先拍照或選擇照片。');
+        return;
+      }
+      const screen2Active = screens[1].classList.contains('active');
+      if (screen2Active && points.length === 4) {
+        const detected = await detectWithJscanify(originalImage);
+        if (detected && detected.length === 4) {
+          points = detected.map(clampPoint);
+          drawOverlay();
+          setStatus('文件輪廓已自動偵測，請檢查角點並視需要微調。');
         }
       }
+    }
+
+    window.Module = {
+      onRuntimeInitialized() { onCvReady(); }
     };
 
     const cvWait = setInterval(() => {
       if (window.cv && typeof cv.Mat === 'function') {
         clearInterval(cvWait);
-        cvReady = true;
-        updateLibraryStatus();
+        if (!cvReady) onCvReady();
       }
     }, 500);
   </script>
