@@ -313,6 +313,33 @@
   </div>
 
   <script>
+    // ─────────────────────────────────────────────────────────────────────────
+    // ML document detector configuration (DocAligner heatmap models)
+    //
+    // To enable the AI-based corner detector (3rd-tier fallback after jscanify
+    // and the OpenCV pipeline), point ML_MODEL_URL at a hosted .onnx file from
+    // https://github.com/DocsaidLab/DocAligner.
+    //
+    // Recommended model for mobile browser:
+    //   lcnet100_h_e_bifpn_256_fp32.onnx  (~4.9 MB, Jaccard 0.989)
+    //
+    // How to obtain the .onnx file (one of):
+    //   (a) `pip install docaligner-docsaid` then run once in Python:
+    //         from docaligner import DocAligner
+    //         DocAligner(model_cfg='lcnet100')
+    //       The file will be cached under
+    //       site-packages/docaligner/heatmap_reg/ckpt/lcnet100_h_e_bifpn_256_fp32.onnx
+    //   (b) Download directly using the Google Drive file id from
+    //       docaligner/heatmap_reg/infer.py (lcnet100 -> 1IlbLPkCv-TdaBLOPh_4J97P1_KHYYJ7a).
+    //
+    // Then host it next to this index.html (or anywhere CORS-accessible) and
+    // set ML_MODEL_URL below. Loading happens lazily on first use.
+    // ─────────────────────────────────────────────────────────────────────────
+    const ML_MODEL_URL = null; // e.g. './lcnet100_h_e_bifpn_256_fp32.onnx'
+    const ML_INPUT_SIZE = 256;
+    const ML_HEATMAP_THRESHOLD = 0.3;
+    const ORT_CDN = 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.20.1/dist/ort.min.js';
+
     const fileInput = document.getElementById('fileInput');
     const sourceImage = document.getElementById('sourceImage');
     const viewer = document.getElementById('viewer');
@@ -435,7 +462,152 @@
         try { contour?.delete?.(); } catch (_) {}
       }
     }
-    // TensorFlow deep model detection has been disabled in favor of jscanify + OpenCV.
+    let mlSession = null;
+    let mlSessionLoading = null;
+    let mlScriptLoading = null;
+
+    function loadScriptOnce(src) {
+      return new Promise((resolve, reject) => {
+        const existing = document.querySelector(`script[data-src="${src}"]`);
+        if (existing && existing.dataset.loaded === '1') { resolve(); return; }
+        if (existing) {
+          existing.addEventListener('load', () => resolve());
+          existing.addEventListener('error', reject);
+          return;
+        }
+        const s = document.createElement('script');
+        s.src = src;
+        s.async = true;
+        s.dataset.src = src;
+        s.onload = () => { s.dataset.loaded = '1'; resolve(); };
+        s.onerror = reject;
+        document.head.appendChild(s);
+      });
+    }
+
+    async function ensureORT() {
+      if (typeof ort !== 'undefined') return window.ort;
+      if (!mlScriptLoading) mlScriptLoading = loadScriptOnce(ORT_CDN);
+      await mlScriptLoading;
+      return window.ort;
+    }
+
+    async function ensureMLModel() {
+      if (!ML_MODEL_URL) return null;
+      if (mlSession) return mlSession;
+      if (mlSessionLoading) return mlSessionLoading;
+      mlSessionLoading = (async () => {
+        try {
+          const ortLib = await ensureORT();
+          if (!ortLib) return null;
+          const session = await ortLib.InferenceSession.create(ML_MODEL_URL, {
+            executionProviders: ['wasm'],
+            graphOptimizationLevel: 'all',
+          });
+          mlSession = session;
+          return session;
+        } catch (err) {
+          console.warn('Failed to load ML model:', err);
+          mlSessionLoading = null;
+          return null;
+        }
+      })();
+      return mlSessionLoading;
+    }
+
+    function imageToNCHWFloat32(img, size) {
+      const tmp = document.createElement('canvas');
+      tmp.width = size;
+      tmp.height = size;
+      const ctx = tmp.getContext('2d', { willReadFrequently: true });
+      ctx.drawImage(img, 0, 0, size, size);
+      const { data } = ctx.getImageData(0, 0, size, size);
+      const N = size * size;
+      const out = new Float32Array(3 * N);
+      for (let i = 0; i < N; i++) {
+        out[i] = data[i * 4] / 255;             // R
+        out[N + i] = data[i * 4 + 1] / 255;     // G
+        out[2 * N + i] = data[i * 4 + 2] / 255; // B
+      }
+      return out;
+    }
+
+    function heatmapChannelToCorner(arr, c, H, W, threshold) {
+      let sumX = 0, sumY = 0, weight = 0;
+      let maxV = -Infinity, maxX = 0, maxY = 0;
+      const base = c * H * W;
+      for (let y = 0; y < H; y++) {
+        for (let x = 0; x < W; x++) {
+          const v = arr[base + y * W + x];
+          if (v > maxV) { maxV = v; maxX = x; maxY = y; }
+          if (v > threshold) {
+            sumX += x * v;
+            sumY += y * v;
+            weight += v;
+          }
+        }
+      }
+      if (maxV < threshold * 0.5) return null;
+      if (weight > 0) return { x: sumX / weight, y: sumY / weight, score: maxV };
+      return { x: maxX, y: maxY, score: maxV };
+    }
+
+    async function detectWithMLModel(img) {
+      if (!ML_MODEL_URL) return null;
+      try {
+        const session = await ensureMLModel();
+        if (!session) return null;
+        const ortLib = window.ort;
+        if (!ortLib) return null;
+
+        const tensorData = imageToNCHWFloat32(img, ML_INPUT_SIZE);
+        const input = new ortLib.Tensor('float32', tensorData, [1, 3, ML_INPUT_SIZE, ML_INPUT_SIZE]);
+        const inputName = session.inputNames[0];
+        const out = await session.run({ [inputName]: input });
+        const outputName = session.outputNames.find(n => n.toLowerCase().includes('heatmap')) || session.outputNames[0];
+        const heatmap = out[outputName];
+        if (!heatmap || heatmap.dims.length !== 4) return null;
+
+        const [, C, H, W] = heatmap.dims;
+        if (C < 4) return null;
+        const arr = heatmap.data;
+
+        const cornersHM = [];
+        for (let c = 0; c < 4; c++) {
+          const p = heatmapChannelToCorner(arr, c, H, W, ML_HEATMAP_THRESHOLD);
+          if (!p) return null;
+          cornersHM.push(p);
+        }
+
+        const sx = display.width / W;
+        const sy = display.height / H;
+        const mapped = cornersHM.map(p => ({
+          x: display.x + p.x * sx,
+          y: display.y + p.y * sy,
+        }));
+        return sortCorners(mapped);
+      } catch (err) {
+        console.warn('ML detector failed:', err);
+        return null;
+      }
+    }
+
+    async function detectDocumentAuto(img, onTier) {
+      onTier?.('jscanify');
+      let detected = await detectWithJscanify(img);
+      if (detected) return { points: detected, tier: 'jscanify' };
+
+      onTier?.('opencv');
+      detected = detectDocumentWithOpenCV(img);
+      if (detected) return { points: detected, tier: 'opencv' };
+
+      if (ML_MODEL_URL) {
+        onTier?.('ml');
+        detected = await detectWithMLModel(img);
+        if (detected) return { points: detected, tier: 'ml' };
+      }
+      return null;
+    }
 
     function resizeOverlay() {
       const rect = viewer.getBoundingClientRect();
@@ -614,10 +786,11 @@
       showStep(2);
       const rect = viewer.getBoundingClientRect();
       display = getDisplayRect(img.naturalWidth, img.naturalHeight, rect.width, rect.height);
-      const detected = await detectWithJscanify(img);
-      if (detected && detected.length === 4) {
-        points = detected.map(clampPoint);
-        setStatus('文件輪廓已自動偵測，請檢查角點並按「自動偵測」或直接裁切。');
+      const result = await detectDocumentAuto(img);
+      if (result && result.points.length === 4) {
+        points = result.points.map(clampPoint);
+        const tierLabel = result.tier === 'ml' ? 'AI 模型' : (result.tier === 'opencv' ? '邊緣偵測' : '快速偵測');
+        setStatus(`已用「${tierLabel}」自動找到文件邊界，請檢查角點並視需要微調。`);
       } else {
         points = defaultPoints();
         setStatus(cvReady ? '照片已載入，請先按「自動偵測」，再視需要手動微調角點。' : '照片已載入。基本系統(OpenCV) 尚未完成載入，也可以直接手動拖曳角點。');
@@ -742,21 +915,18 @@
       if (!originalImage) return;
 
       setStatus('正在以智慧文件偵測引擎分析邊界…');
-
       await new Promise(r => requestAnimationFrame(r));
 
-      // ① Jscanify FIRST
-      let detected = await detectWithJscanify(originalImage);
+      const result = await detectDocumentAuto(originalImage, (tier) => {
+        if (tier === 'opencv') setStatus('快速偵測未成功，改用邊緣偵測…');
+        else if (tier === 'ml') setStatus('邊緣偵測未成功，正在載入並執行 AI 模型…');
+      });
 
-      // ② fallback to OpenCV
-      if (!detected) {
-        detected = detectDocumentWithOpenCV(originalImage);
-      }
-
-      if (detected && detected.length === 4) {
-        points = detected.map(clampPoint);
+      if (result && result.points.length === 4) {
+        points = result.points.map(clampPoint);
         drawOverlay();
-        setStatus('文件邊界偵測完成。請檢查角點，必要時微調。');
+        const tierLabel = result.tier === 'ml' ? 'AI 模型' : (result.tier === 'opencv' ? '邊緣偵測' : '快速偵測');
+        setStatus(`「${tierLabel}」偵測完成，請檢查角點並視需要微調。`);
       } else {
         setStatus('無法自動偵測文件，請手動調整角點。');
       }
@@ -1034,11 +1204,12 @@
       }
       const screen2Active = screens[1].classList.contains('active');
       if (screen2Active && points.length === 4) {
-        const detected = await detectWithJscanify(originalImage);
-        if (detected && detected.length === 4) {
-          points = detected.map(clampPoint);
+        const result = await detectDocumentAuto(originalImage);
+        if (result && result.points.length === 4) {
+          points = result.points.map(clampPoint);
           drawOverlay();
-          setStatus('文件輪廓已自動偵測，請檢查角點並視需要微調。');
+          const tierLabel = result.tier === 'ml' ? 'AI 模型' : (result.tier === 'opencv' ? '邊緣偵測' : '快速偵測');
+          setStatus(`已用「${tierLabel}」自動找到文件邊界，請檢查角點並視需要微調。`);
         }
       }
     }
