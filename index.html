@@ -313,33 +313,6 @@
   </div>
 
   <script>
-    // ─────────────────────────────────────────────────────────────────────────
-    // ML document detector configuration (DocAligner heatmap models)
-    //
-    // To enable the AI-based corner detector (3rd-tier fallback after jscanify
-    // and the OpenCV pipeline), point ML_MODEL_URL at a hosted .onnx file from
-    // https://github.com/DocsaidLab/DocAligner.
-    //
-    // Recommended model for mobile browser:
-    //   lcnet100_h_e_bifpn_256_fp32.onnx  (~4.9 MB, Jaccard 0.989)
-    //
-    // How to obtain the .onnx file (one of):
-    //   (a) `pip install docaligner-docsaid` then run once in Python:
-    //         from docaligner import DocAligner
-    //         DocAligner(model_cfg='lcnet100')
-    //       The file will be cached under
-    //       site-packages/docaligner/heatmap_reg/ckpt/lcnet100_h_e_bifpn_256_fp32.onnx
-    //   (b) Download directly using the Google Drive file id from
-    //       docaligner/heatmap_reg/infer.py (lcnet100 -> 1IlbLPkCv-TdaBLOPh_4J97P1_KHYYJ7a).
-    //
-    // Then host it next to this index.html (or anywhere CORS-accessible) and
-    // set ML_MODEL_URL below. Loading happens lazily on first use.
-    // ─────────────────────────────────────────────────────────────────────────
-    const ML_MODEL_URL = null; // e.g. './lcnet100_h_e_bifpn_256_fp32.onnx'
-    const ML_INPUT_SIZE = 256;
-    const ML_HEATMAP_THRESHOLD = 0.3;
-    const ORT_CDN = 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.20.1/dist/ort.min.js';
-
     const fileInput = document.getElementById('fileInput');
     const sourceImage = document.getElementById('sourceImage');
     const viewer = document.getElementById('viewer');
@@ -462,150 +435,15 @@
         try { contour?.delete?.(); } catch (_) {}
       }
     }
-    let mlSession = null;
-    let mlSessionLoading = null;
-    let mlScriptLoading = null;
-
-    function loadScriptOnce(src) {
-      return new Promise((resolve, reject) => {
-        const existing = document.querySelector(`script[data-src="${src}"]`);
-        if (existing && existing.dataset.loaded === '1') { resolve(); return; }
-        if (existing) {
-          existing.addEventListener('load', () => resolve());
-          existing.addEventListener('error', reject);
-          return;
-        }
-        const s = document.createElement('script');
-        s.src = src;
-        s.async = true;
-        s.dataset.src = src;
-        s.onload = () => { s.dataset.loaded = '1'; resolve(); };
-        s.onerror = reject;
-        document.head.appendChild(s);
-      });
-    }
-
-    async function ensureORT() {
-      if (typeof ort !== 'undefined') return window.ort;
-      if (!mlScriptLoading) mlScriptLoading = loadScriptOnce(ORT_CDN);
-      await mlScriptLoading;
-      return window.ort;
-    }
-
-    async function ensureMLModel() {
-      if (!ML_MODEL_URL) return null;
-      if (mlSession) return mlSession;
-      if (mlSessionLoading) return mlSessionLoading;
-      mlSessionLoading = (async () => {
-        try {
-          const ortLib = await ensureORT();
-          if (!ortLib) return null;
-          const session = await ortLib.InferenceSession.create(ML_MODEL_URL, {
-            executionProviders: ['wasm'],
-            graphOptimizationLevel: 'all',
-          });
-          mlSession = session;
-          return session;
-        } catch (err) {
-          console.warn('Failed to load ML model:', err);
-          mlSessionLoading = null;
-          return null;
-        }
-      })();
-      return mlSessionLoading;
-    }
-
-    function imageToNCHWFloat32(img, size) {
-      const tmp = document.createElement('canvas');
-      tmp.width = size;
-      tmp.height = size;
-      const ctx = tmp.getContext('2d', { willReadFrequently: true });
-      ctx.drawImage(img, 0, 0, size, size);
-      const { data } = ctx.getImageData(0, 0, size, size);
-      const N = size * size;
-      const out = new Float32Array(3 * N);
-      for (let i = 0; i < N; i++) {
-        out[i] = data[i * 4] / 255;             // R
-        out[N + i] = data[i * 4 + 1] / 255;     // G
-        out[2 * N + i] = data[i * 4 + 2] / 255; // B
-      }
-      return out;
-    }
-
-    function heatmapChannelToCorner(arr, c, H, W, threshold) {
-      let sumX = 0, sumY = 0, weight = 0;
-      let maxV = -Infinity, maxX = 0, maxY = 0;
-      const base = c * H * W;
-      for (let y = 0; y < H; y++) {
-        for (let x = 0; x < W; x++) {
-          const v = arr[base + y * W + x];
-          if (v > maxV) { maxV = v; maxX = x; maxY = y; }
-          if (v > threshold) {
-            sumX += x * v;
-            sumY += y * v;
-            weight += v;
-          }
-        }
-      }
-      if (maxV < threshold * 0.5) return null;
-      if (weight > 0) return { x: sumX / weight, y: sumY / weight, score: maxV };
-      return { x: maxX, y: maxY, score: maxV };
-    }
-
-    async function detectWithMLModel(img) {
-      if (!ML_MODEL_URL) return null;
-      try {
-        const session = await ensureMLModel();
-        if (!session) return null;
-        const ortLib = window.ort;
-        if (!ortLib) return null;
-
-        const tensorData = imageToNCHWFloat32(img, ML_INPUT_SIZE);
-        const input = new ortLib.Tensor('float32', tensorData, [1, 3, ML_INPUT_SIZE, ML_INPUT_SIZE]);
-        const inputName = session.inputNames[0];
-        const out = await session.run({ [inputName]: input });
-        const outputName = session.outputNames.find(n => n.toLowerCase().includes('heatmap')) || session.outputNames[0];
-        const heatmap = out[outputName];
-        if (!heatmap || heatmap.dims.length !== 4) return null;
-
-        const [, C, H, W] = heatmap.dims;
-        if (C < 4) return null;
-        const arr = heatmap.data;
-
-        const cornersHM = [];
-        for (let c = 0; c < 4; c++) {
-          const p = heatmapChannelToCorner(arr, c, H, W, ML_HEATMAP_THRESHOLD);
-          if (!p) return null;
-          cornersHM.push(p);
-        }
-
-        const sx = display.width / W;
-        const sy = display.height / H;
-        const mapped = cornersHM.map(p => ({
-          x: display.x + p.x * sx,
-          y: display.y + p.y * sy,
-        }));
-        return sortCorners(mapped);
-      } catch (err) {
-        console.warn('ML detector failed:', err);
-        return null;
-      }
-    }
-
     async function detectDocumentAuto(img, onTier) {
       onTier?.('jscanify');
       let detected = await detectWithJscanify(img);
       if (detected) return { points: detected, tier: 'jscanify' };
 
       onTier?.('opencv');
-      detected = detectDocumentWithOpenCV(img);
+      detected = detectDocumentRobust(img);
       if (detected) return { points: detected, tier: 'opencv' };
 
-      if (ML_MODEL_URL) {
-        onTier?.('ml');
-        detected = await detectWithMLModel(img);
-        if (detected) return { points: detected, tier: 'ml' };
-      }
       return null;
     }
 
@@ -789,7 +627,7 @@
       const result = await detectDocumentAuto(img);
       if (result && result.points.length === 4) {
         points = result.points.map(clampPoint);
-        const tierLabel = result.tier === 'ml' ? 'AI 模型' : (result.tier === 'opencv' ? '邊緣偵測' : '快速偵測');
+        const tierLabel = result.tier === 'opencv' ? '增強邊緣偵測' : '快速偵測';
         setStatus(`已用「${tierLabel}」自動找到文件邊界，請檢查角點並視需要微調。`);
       } else {
         points = defaultPoints();
@@ -817,7 +655,172 @@
       setStatus('角點已重設。');
     });
 
-    function detectDocumentWithOpenCV(img) {
+    // Approximate median of a single-channel CV_8U Mat by uniform sampling.
+    function approxMedian(mat) {
+      const data = mat.data;
+      const N = data.length;
+      if (!N) return 128;
+      const target = 4096;
+      const step = Math.max(1, Math.floor(N / target));
+      const sample = [];
+      for (let i = 0; i < N; i += step) sample.push(data[i]);
+      sample.sort((a, b) => a - b);
+      return sample[Math.floor(sample.length / 2)] || 128;
+    }
+
+    // Closeness of a quad's interior angles to 90° (0..1, 1 = perfect).
+    function quadAngleScore(p) {
+      let total = 0;
+      for (let i = 0; i < 4; i++) {
+        const a = p[(i + 3) % 4];
+        const b = p[i];
+        const c = p[(i + 1) % 4];
+        const v1x = a.x - b.x, v1y = a.y - b.y;
+        const v2x = c.x - b.x, v2y = c.y - b.y;
+        const m1 = Math.hypot(v1x, v1y) || 1;
+        const m2 = Math.hypot(v2x, v2y) || 1;
+        const cosA = Math.max(-1, Math.min(1, (v1x * v2x + v1y * v2y) / (m1 * m2)));
+        const ang = Math.acos(cosA) * 180 / Math.PI;
+        total += 1 - Math.min(1, Math.abs(ang - 90) / 60);
+      }
+      return total / 4;
+    }
+
+    function collectQuads(contours, w, h, out, source) {
+      const imageArea = w * h;
+      for (let i = 0; i < contours.size(); i++) {
+        const contour = contours.get(i);
+        try {
+          const peri = cv.arcLength(contour, true);
+          const approx = new cv.Mat();
+          try {
+            cv.approxPolyDP(contour, approx, 0.02 * peri, true);
+            if (approx.rows !== 4 || !cv.isContourConvex(approx)) continue;
+            const area = Math.abs(cv.contourArea(approx));
+            if (area < imageArea * 0.06 || area > imageArea * 0.985) continue;
+
+            const pts = [];
+            for (let j = 0; j < 4; j++) {
+              pts.push({ x: approx.intPtr(j, 0)[0], y: approx.intPtr(j, 0)[1] });
+            }
+            const ordered = sortCorners(pts);
+
+            const wTop = dist(ordered[0], ordered[1]);
+            const wBot = dist(ordered[3], ordered[2]);
+            const hLeft = dist(ordered[0], ordered[3]);
+            const hRight = dist(ordered[1], ordered[2]);
+            const avgW = (wTop + wBot) / 2;
+            const avgH = (hLeft + hRight) / 2;
+            let ratio = avgW / Math.max(1, avgH);
+            if (ratio < 1) ratio = 1 / ratio; // orientation-agnostic
+            if (ratio > 2.4) continue;
+
+            const cx = ordered.reduce((s, p) => s + p.x, 0) / 4;
+            const cy = ordered.reduce((s, p) => s + p.y, 0) / 4;
+            const centerBias = 1 - Math.hypot(cx - w / 2, cy - h / 2) / Math.hypot(w / 2, h / 2);
+            const areaScore = area / imageArea;
+            const widthBalance = 1 - Math.abs(wTop - wBot) / Math.max(wTop, wBot);
+            const heightBalance = 1 - Math.abs(hLeft - hRight) / Math.max(hLeft, hRight);
+            const balance = (widthBalance + heightBalance) / 2;
+            const angleScore = quadAngleScore(ordered);
+            const ratioPenalty = Math.max(0, ratio - 1.0) * 0.6;
+
+            const score = areaScore * 50
+                        + centerBias * 12
+                        + balance * 18
+                        + angleScore * 20
+                        - ratioPenalty * 8;
+
+            out.push({ pts: ordered, score, source });
+          } finally {
+            approx.delete();
+          }
+        } finally {
+          contour.delete();
+        }
+      }
+    }
+
+    // Build a CLAHE-enhanced L channel (Lab) from a CV_8UC4 source.
+    // Caller owns the returned Mat.
+    function makeClaheLChannel(src) {
+      const rgb = new cv.Mat();
+      const lab = new cv.Mat();
+      const labChans = new cv.MatVector();
+      const lOut = new cv.Mat();
+      let clahe = null;
+      try {
+        cv.cvtColor(src, rgb, cv.COLOR_RGBA2RGB);
+        cv.cvtColor(rgb, lab, cv.COLOR_RGB2Lab);
+        cv.split(lab, labChans);
+        clahe = new cv.CLAHE(2.0, new cv.Size(8, 8));
+        clahe.apply(labChans.get(0), lOut);
+        return lOut;
+      } catch (err) {
+        lOut.delete();
+        throw err;
+      } finally {
+        rgb.delete();
+        lab.delete();
+        labChans.delete();
+        try { clahe?.delete?.(); } catch (_) {}
+      }
+    }
+
+    function runEdgePipeline(input, w, h, out, label) {
+      const blurred = new cv.Mat();
+      const edges = new cv.Mat();
+      const k = cv.Mat.ones(3, 3, cv.CV_8U);
+      const contours = new cv.MatVector();
+      const hier = new cv.Mat();
+      try {
+        // Bilateral filter preserves edges while smoothing flat regions.
+        cv.bilateralFilter(input, blurred, 9, 50, 50, cv.BORDER_DEFAULT);
+        // Auto-Canny: thresholds derived from the image median.
+        const med = approxMedian(blurred);
+        const sigma = 0.33;
+        const lo = Math.max(0, Math.round((1 - sigma) * med));
+        const hi = Math.min(255, Math.round((1 + sigma) * med));
+        cv.Canny(blurred, edges, lo, hi, 3, false);
+        cv.dilate(edges, edges, k, new cv.Point(-1, -1), 1);
+        cv.morphologyEx(edges, edges, cv.MORPH_CLOSE, k);
+        cv.findContours(edges, contours, hier, cv.RETR_LIST, cv.CHAIN_APPROX_SIMPLE);
+        collectQuads(contours, w, h, out, label);
+      } finally {
+        blurred.delete();
+        edges.delete();
+        k.delete();
+        contours.delete();
+        hier.delete();
+      }
+    }
+
+    function runAdaptivePipeline(gray, w, h, out, label) {
+      const blurred = new cv.Mat();
+      const thresh = new cv.Mat();
+      const k = cv.Mat.ones(3, 3, cv.CV_8U);
+      const contours = new cv.MatVector();
+      const hier = new cv.Mat();
+      try {
+        cv.medianBlur(gray, blurred, 5);
+        // Adaptive threshold succeeds on white-on-white where Canny gives nothing.
+        cv.adaptiveThreshold(
+          blurred, thresh, 255,
+          cv.ADAPTIVE_THRESH_GAUSSIAN_C, cv.THRESH_BINARY_INV, 31, 7
+        );
+        cv.morphologyEx(thresh, thresh, cv.MORPH_CLOSE, k);
+        cv.findContours(thresh, contours, hier, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
+        collectQuads(contours, w, h, out, label);
+      } finally {
+        blurred.delete();
+        thresh.delete();
+        k.delete();
+        contours.delete();
+        hier.delete();
+      }
+    }
+
+    function detectDocumentRobust(img) {
       if (!window.cv || !cvReady) return null;
 
       const maxDim = 1200;
@@ -828,87 +831,40 @@
       const tempCanvas = document.createElement('canvas');
       tempCanvas.width = w;
       tempCanvas.height = h;
-      const ctx = tempCanvas.getContext('2d');
-      ctx.drawImage(img, 0, 0, w, h);
+      tempCanvas.getContext('2d').drawImage(img, 0, 0, w, h);
 
-      let src = null, gray = null, blur = null, edges = null, contours = null, hierarchy = null, kernel = null;
+      let src = null, gray = null, lClahe = null;
+      const candidates = [];
       try {
         src = cv.imread(tempCanvas);
         gray = new cv.Mat();
-        blur = new cv.Mat();
-        edges = new cv.Mat();
-        contours = new cv.MatVector();
-        hierarchy = new cv.Mat();
+        cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
 
-        cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY, 0);
-        cv.GaussianBlur(gray, blur, new cv.Size(5, 5), 0, 0, cv.BORDER_DEFAULT);
-        cv.Canny(blur, edges, 50, 150, 3, false);
-        kernel = cv.Mat.ones(3, 3, cv.CV_8U);
-        cv.dilate(edges, edges, kernel, new cv.Point(-1, -1), 1);
-        cv.morphologyEx(edges, edges, cv.MORPH_CLOSE, kernel);
-        cv.findContours(edges, contours, hierarchy, cv.RETR_LIST, cv.CHAIN_APPROX_SIMPLE);
-
-        let best = null;
-        let bestScore = -Infinity;
-        const imageArea = w * h;
-
-        for (let i = 0; i < contours.size(); i++) {
-          const contour = contours.get(i);
-          const peri = cv.arcLength(contour, true);
-          const approx = new cv.Mat();
-          cv.approxPolyDP(contour, approx, 0.02 * peri, true);
-
-          if (approx.rows === 4 && cv.isContourConvex(approx)) {
-            const area = Math.abs(cv.contourArea(approx));
-            if (area >= imageArea * 0.08 && area <= imageArea * 0.98) {
-              const pts = [];
-              for (let j = 0; j < 4; j++) {
-                pts.push({ x: approx.intPtr(j, 0)[0], y: approx.intPtr(j, 0)[1] });
-              }
-              const ordered = sortCorners(pts);
-              const widthTop = dist(ordered[0], ordered[1]);
-              const widthBottom = dist(ordered[3], ordered[2]);
-              const heightLeft = dist(ordered[0], ordered[3]);
-              const heightRight = dist(ordered[1], ordered[2]);
-              const avgW = (widthTop + widthBottom) / 2;
-              const avgH = (heightLeft + heightRight) / 2;
-              const ratio = avgW / Math.max(1, avgH);
-              const ratioPenalty = Math.abs(ratio - 1.75);
-              const centerX = ordered.reduce((s, p) => s + p.x, 0) / 4;
-              const centerY = ordered.reduce((s, p) => s + p.y, 0) / 4;
-              const centerBias = 1 - (Math.hypot(centerX - w / 2, centerY - h / 2) / Math.hypot(w / 2, h / 2));
-              const areaScore = area / imageArea;
-
-              if (ratio > 1.2 && ratio < 2.3) {
-                const score = areaScore * 100 + centerBias * 12 - ratioPenalty * 10;
-                if (score > bestScore) {
-                  bestScore = score;
-                  best = ordered;
-                }
-              }
-            }
-          }
-
-          approx.delete();
-          contour.delete();
+        try {
+          lClahe = makeClaheLChannel(src);
+        } catch (err) {
+          console.warn('CLAHE pipeline setup failed:', err);
+          lClahe = null;
         }
 
-        if (!best) return null;
+        if (lClahe) runEdgePipeline(lClahe, w, h, candidates, 'lab-clahe');
+        runEdgePipeline(gray, w, h, candidates, 'gray');
+        runAdaptivePipeline(gray, w, h, candidates, 'adaptive');
+
+        if (!candidates.length) return null;
+        candidates.sort((a, b) => b.score - a.score);
+        const best = candidates[0].pts;
         return best.map(p => ({
           x: display.x + p.x * (display.width / w),
-          y: display.y + p.y * (display.height / h)
+          y: display.y + p.y * (display.height / h),
         }));
       } catch (err) {
         console.error(err);
         return null;
       } finally {
-        src?.delete();
-        gray?.delete();
-        blur?.delete();
-        edges?.delete();
-        contours?.delete();
-        hierarchy?.delete();
-        kernel?.delete();
+        try { src?.delete(); } catch (_) {}
+        try { gray?.delete(); } catch (_) {}
+        try { lClahe?.delete(); } catch (_) {}
       }
     }
     autoDetectBtn.addEventListener('click', async () => {
@@ -918,14 +874,13 @@
       await new Promise(r => requestAnimationFrame(r));
 
       const result = await detectDocumentAuto(originalImage, (tier) => {
-        if (tier === 'opencv') setStatus('快速偵測未成功，改用邊緣偵測…');
-        else if (tier === 'ml') setStatus('邊緣偵測未成功，正在載入並執行 AI 模型…');
+        if (tier === 'opencv') setStatus('快速偵測未成功，改用增強邊緣偵測…');
       });
 
       if (result && result.points.length === 4) {
         points = result.points.map(clampPoint);
         drawOverlay();
-        const tierLabel = result.tier === 'ml' ? 'AI 模型' : (result.tier === 'opencv' ? '邊緣偵測' : '快速偵測');
+        const tierLabel = result.tier === 'opencv' ? '增強邊緣偵測' : '快速偵測';
         setStatus(`「${tierLabel}」偵測完成，請檢查角點並視需要微調。`);
       } else {
         setStatus('無法自動偵測文件，請手動調整角點。');
@@ -1208,7 +1163,7 @@
         if (result && result.points.length === 4) {
           points = result.points.map(clampPoint);
           drawOverlay();
-          const tierLabel = result.tier === 'ml' ? 'AI 模型' : (result.tier === 'opencv' ? '邊緣偵測' : '快速偵測');
+          const tierLabel = result.tier === 'opencv' ? '增強邊緣偵測' : '快速偵測';
           setStatus(`已用「${tierLabel}」自動找到文件邊界，請檢查角點並視需要微調。`);
         }
       }
